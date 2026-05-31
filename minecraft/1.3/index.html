@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>JS Minecraft (Nu met echte Fysica!)</title>
+    <style>
+        body { margin: 0; padding: 0; overflow: hidden; font-family: 'Segoe UI', sans-serif; user-select: none; background-color: #202020; color: white; }
+        #canvas-container { width: 100vw; height: 100vh; }
+        #crosshair { position: absolute; top: 50%; left: 50%; width: 10px; height: 10px; transform: translate(-50%, -50%); pointer-events: none; }
+        #crosshair::before, #crosshair::after { content: ''; position: absolute; background: rgba(255, 255, 255, 0.7); }
+        #crosshair::before { top: 4px; left: 0; width: 10px; height: 2px; }
+        #crosshair::after { top: 0; left: 4px; width: 2px; height: 10px; }
+        #ui-overlay { position: absolute; top: 20px; left: 20px; text-shadow: 2px 2px 4px rgba(0,0,0,0.8); font-weight: bold; pointer-events: none; }
+        #instructions { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: rgba(0, 0, 0, 0.9); padding: 30px; border-radius: 8px; text-align: center; cursor: pointer; border: 2px solid #555; min-width: 350px; box-shadow: 0 0 20px rgba(0,0,0,0.7); }
+        #hotbar { position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%); display: flex; background: rgba(0, 0, 0, 0.5); padding: 5px; border-radius: 5px; border: 2px solid #333; }
+        .slot { width: 60px; height: 50px; margin: 0 4px; border: 2px solid #555; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: bold; }
+        .slot.active { border-color: #fff; box-shadow: 0 0 10px #fff; }
+        #error-msg { display: none; color: #ff6b6b; background: #2a1515; border: 2px solid #ff6b6b; padding: 20px; margin-top: 15px; border-radius: 5px; font-size: 14px; text-align: left; line-height: 1.5; }
+    </style>
+</head>
+<body>
+    <div id="canvas-container"></div>
+    <div id="crosshair"></div>
+    <div id="ui-overlay"><div>Blokken Gesloopt: <span id="score">0</span></div></div>
+    <div id="instructions">
+        <h2>MINECRAFT JS</h2>
+        <p id="status-text" style="color: #ffaa00;">3D Bestanden laden...</p>
+        <div id="game-controls" style="display: none;">
+            <p style="font-size: 22px; color: #5cc441; font-weight: bold; margin: 10px 0;">Klik hier om te spelen</p>
+            <p style="font-size: 14px; color: #aaa; line-height: 1.6;">
+                <b>WASD</b> = Bewegen | <b>SPATIE</b> = Springen | <b>Vallen</b> = Gewoon van de rand lopen<br>
+                <b>Linksklik</b> = Blok slopen | <b>Rechtsklik</b> = Blok bouwen (snaps)<br>
+                <b>Toets 1 t/m 4</b> = Wissel van blok
+            </p>
+        </div>
+        <div id="error-msg"><b>Chrome blokkeert de 3D-engine. Fix:</b><br><br><ol><li>Zet je <b>Adblocker</b> uit voor dit bestand.</li><li><b>Incognito:</b> Druk op <code>Ctrl + Shift + N</code> en sleep dit bestand daar eens in.</li></ol></div>
+    </div>
+    <div id="hotbar">
+        <div class="slot active" id="slot1" style="background-color: #5cc441;">Gras (1)</div>
+        <div class="slot" id="slot2" style="background-color: #866043;">Aarde (2)</div>
+        <div class="slot" id="slot3" style="background-color: #808080;">Steen (3)</div>
+        <div class="slot" id="slot4" style="background-color: #a07040;">Hout (4)</div>
+    </div>
+
+    <script>
+        const threeSources = ["https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js","https://unpkg.com/three@0.128.0/build/three.min.js"];
+        const controlsSources = ["https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/PointerLockControls.js","https://unpkg.com/three@0.128.0/examples/js/controls/PointerLockControls.js"];
+        function loadScript(src){return new Promise((resolve,reject)=>{const script=document.createElement('script');script.src=src;script.onload=resolve;script.onerror=reject;document.head.appendChild(script);});}
+        async function initEngine(){let threeLoaded=false;for(let src of threeSources){try{await loadScript(src);threeLoaded=true;break;}catch(e){}}if(!threeLoaded){showChromeError();return;}let controlsLoaded=false;for(let src of controlsSources){try{await loadScript(src);controlsLoaded=true;break;}catch(e){}}if(!controlsLoaded){showChromeError();return;}document.getElementById('status-text').style.display='none';document.getElementById('game-controls').style.display='block';runGame();}
+        function showChromeError(){document.getElementById('status-text').style.display='none';document.getElementById('error-msg').style.display='block';}
+        initEngine();
+
+        // --- Core Game code (Nu met Fysica) ---
+        function runGame() {
+            const container = document.getElementById('canvas-container');
+            const scoreEl = document.getElementById('score');
+            const instructions = document.getElementById('instructions');
+            
+            let scene, camera, renderer, controls;
+            let blocks = []; // Hierin staan alle blokken voor botsingsdetectie
+            let blockCount = 0;
+            
+            // Fysica variabelen
+            let moveForward=false, moveBackward=false, moveLeft=false, moveRight=false, canJump=false;
+            let velocity = new THREE.Vector3(), direction = new THREE.Vector3();
+            let prevTime = performance.now();
+            const PLAYER_HEIGHT = 1.8; // Hoogte van de camera/ogen
+
+            const BLOCK_SIZE = 1;
+            let selectedBlockType = 1;
+            const blockMaterials = {
+                1: new THREE.MeshLambertMaterial({color: 0x5cc441}),
+                2: new THREE.MeshLambertMaterial({color: 0x866043}),
+                3: new THREE.MeshLambertMaterial({color: 0x808080}),
+                4: new THREE.MeshLambertMaterial({color: 0xa07040})
+            };
+            const blockGeometry = new THREE.BoxGeometry(BLOCK_SIZE, BLOCK_SIZE, BLOCK_SIZE);
+
+            init();
+            animate();
+
+            function init() {
+                scene = new THREE.Scene();
+                scene.background = new THREE.Color(0x7ec0ee); // Lucht
+                scene.fog = new THREE.FogExp2(0x7ec0ee, 0.05);
+
+                camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+                // Startpositie is belangrijk: iets boven de grond (bijv op y=4)
+                camera.position.set(8, 4, 8);
+
+                scene.add(new THREE.AmbientLight(0xcccccc, 0.6));
+                const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+                directionalLight.position.set(20, 40, 20);
+                scene.add(directionalLight);
+
+                controls = new THREE.PointerLockControls(camera, document.body);
+                instructions.addEventListener('click', () => {
+                    if(document.getElementById('game-controls').style.display!=='none') controls.lock();
+                });
+                controls.addEventListener('lock', () => { instructions.style.display = 'none'; });
+                controls.addEventListener('unlock', () => { instructions.style.display = 'block'; });
+                scene.add(controls.getObject());
+
+                const onKeyDown=(e)=>{switch(e.code){case 'KeyW':moveForward=true;break;case 'KeyA':moveLeft=true;break;case 'KeyS':moveBackward=true;break;case 'KeyD':moveRight=true;break;case 'Space':if(canJump===true)velocity.y+=7;canJump=false;break;case 'Digit1':switchActiveSlot(1);break;case 'Digit2':switchActiveSlot(2);break;case 'Digit3':switchActiveSlot(3);break;case 'Digit4':switchActiveSlot(4);break;}};
+                const onKeyUp=(e)=>{switch(e.code){case 'KeyW':moveForward=false;break;case 'KeyA':moveLeft=false;break;case 'KeyS':moveBackward=false;break;case 'KeyD':moveRight=false;break;}};
+                document.addEventListener('keydown', onKeyDown);
+                document.addEventListener('keyup', onKeyUp);
+                document.addEventListener('mousedown', onMouseDown);
+                window.addEventListener('contextmenu', e=>e.preventDefault());
+
+                generateWorld();
+
+                renderer = new THREE.WebGLRenderer({antialias:true});
+                renderer.setPixelRatio(window.devicePixelRatio);
+                renderer.setSize(window.innerWidth, window.innerHeight);
+                container.appendChild(renderer.domElement);
+                window.addEventListener('resize', onWindowResize);
+            }
+
+            function generateWorld() {
+                const worldSize = 20;
+                const depth = 3;
+                for(let x=0; x<worldSize; x++) {
+                    for(let z=0; z<worldSize; z++) {
+                        for(let y=0; y<depth; y++) {
+                            let type = 2; // Aarde
+                            if(y===depth-1) type=1; // Gras bovenop
+                            if(y<depth-2) type=3; // Steen onderop
+                            createBlock(x, y, z, type);
+                        }
+                    }
+                }
+            }
+
+            function createBlock(x,y,z,type) {
+                const mesh = new THREE.Mesh(blockGeometry, blockMaterials[type]);
+                // Snap de positie naar het dichtstbijzijnde gehele getal (raster/grid)
+                mesh.position.set(Math.round(x), Math.round(y), Math.round(z));
+                scene.add(mesh);
+                blocks.push(mesh); // Voeg toe aan de botsings-lijst
+            }
+
+            function onMouseDown(e) {
+                if(!controls.isLocked) return;
+                const raycaster = new THREE.Raycaster();
+                raycaster.setFromCamera(new THREE.Vector2(0,0), camera);
+                const intersects = raycaster.intersectObjects(blocks);
+
+                if(intersects.length>0 && intersects[0].distance<6) {
+                    const intersect = intersects[0];
+                    if(e.button===0) { // Links: Slopen
+                        scene.remove(intersect.object);
+                        blocks = blocks.filter(b => b!==intersect.object);
+                        blockCount++;
+                        scoreEl.innerText = blockCount;
+                    } 
+                    else if(e.button===2) { // Rechts: Bouwen
+                        const normal = intersect.face.normal;
+                        // Bereken de positie voor het nieuwe blok (snaps automatisch)
+                        const newPos = intersect.object.position.clone().add(normal);
+                        
+                        // Zorg dat je het blok niet 'in' jezelf bouwt
+                        const playerPos = controls.getObject().position;
+                        if(Math.abs(playerPos.x - newPos.x) < 0.7 &&
+                           Math.abs(playerPos.z - newPos.z) < 0.7 &&
+                           playerPos.y >= newPos.y - 1 && playerPos.y <= newPos.y + PLAYER_HEIGHT) {
+                            return; // Bouw niet als speler er staat
+                        }
+                        createBlock(newPos.x, newPos.y, newPos.z, selectedBlockType);
+                    }
+                }
+            }
+
+            function animate() {
+                requestAnimationFrame(animate);
+                if (controls.isLocked) {
+                    const time = performance.now();
+                    const delta = (time - prevTime) / 1000;
+
+                    // 1. Pas Zwaartekracht en Wrijving toe
+                    velocity.y -= 9.8 * 2.2 * delta; // Zwaartekracht factor
+                    velocity.x -= velocity.x * 10.0 * delta; // Luchtweerstand
+                    velocity.z -= velocity.z * 10.0 * delta;
+
+                    // 2. Bereken Bewegingsrichting
+                    direction.z = Number(moveForward) - Number(moveBackward);
+                    direction.x = Number(moveRight) - Number(moveLeft);
+                    direction.normalize();
+
+                    // 3. Pas Beweging toe op Snelheid
+                    if (moveForward || moveBackward) velocity.z -= direction.z * 40.0 * delta;
+                    if (moveLeft || moveRight) velocity.x -= direction.x * 40.0 * delta;
+
+                    // --- 4. ECHTE BOTSINGSDETECTIE (HET BELANGRIJKSTE ONDERDEEL) ---
+
+                    // Bereken de nieuwe voorgestelde positie (nog niet toepassen!)
+                    const proposedMove = new THREE.Vector3(
+                        -velocity.x * delta,
+                        velocity.y * delta,
+                        -velocity.z * delta
+                    );
+
+                    // --- Vloerbotsing (Zwaartekracht & Staan) ---
+                    // Schiet een "laser" van je hoofd recht naar beneden
+                    const headPos = controls.getObject().position.clone();
+                    const downRaycaster = new THREE.Raycaster(headPos, new THREE.Vector3(0, -1, 0));
+                    const downIntersects = downRaycaster.intersectObjects(blocks);
+
+                    let grounded = false;
+                    if (downIntersects.length > 0) {
+                        const distToGround = downIntersects[0].distance;
+                        // Als de afstand tot de grond kleiner is dan je ooghoogte (plus een kleine marge)
+                        if (distToGround < PLAYER_HEIGHT + 0.1) {
+                            grounded = true;
+                        }
+                    }
+
+                    if (grounded) {
+                        // Je staat op de grond
+                        velocity.y = Math.max(0, velocity.y); // Stop vallen
+                        // Snap de camera precies op de juiste hoogte boven het blok
+                        controls.getObject().position.y = downIntersects[0].point.y + PLAYER_HEIGHT;
+                        canJump = true;
+                    } else {
+                        // Je valt (of springt)
+                        controls.getObject().position.y += (velocity.y * delta);
+                        canJump = false;
+                    }
+
+                    // --- Muurbotsing (Voorkom door muren lopen) ---
+                    // Deze code is erg simpel en kijkt alleen naar horizontale beweging
+                    // Om het echt perfect te maken (zoals Minecraft) is een veel complexer systeem nodig.
+                    
+                    // Schiet een laser in je looprichting (z-as)
+                    if(velocity.z !== 0) {
+                        const moveDirZ = new THREE.Vector3(0,0,-velocity.z).normalize().applyQuaternion(camera.quaternion);
+                        moveDirZ.y = 0; // Alleen horizontaal checken
+                        const rayZ = new THREE.Raycaster(controls.getObject().position, moveDirZ, 0, 0.6);
+                        if(rayZ.intersectObjects(blocks).length > 0) velocity.z = 0;
+                    }
+                    // Schiet een laser in je zijwaartse richting (x-as)
+                    if(velocity.x !== 0) {
+                        const moveDirX = new THREE.Vector3(-velocity.x,0,0).normalize().applyQuaternion(camera.quaternion);
+                        moveDirX.y = 0; // Alleen horizontaal checken
+                        const rayX = new THREE.Raycaster(controls.getObject().position, moveDirX, 0, 0.6);
+                        if(rayX.intersectObjects(blocks).length > 0) velocity.x = 0;
+                    }
+
+                    // 5. Pas Horizontale Beweging toe
+                    controls.moveRight(-velocity.x * delta);
+                    controls.moveForward(-velocity.z * delta);
+
+                    prevTime = time;
+                }
+                renderer.render(scene, camera);
+            }
+
+            function switchActiveSlot(slotId) { selectedBlockType = slotId; document.querySelectorAll('.slot').forEach(s=>s.classList.remove('active')); document.getElementById(`slot${slotId}`).classList.add('active'); }
+            function onWindowResize() { camera.aspect = window.innerWidth / window.innerHeight; camera.updateProjectionMatrix(); renderer.setSize(window.innerWidth, window.innerHeight); }
+        }
+    </script>
+</body>
+</html>
