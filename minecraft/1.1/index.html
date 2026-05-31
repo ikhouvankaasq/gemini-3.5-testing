@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>JS Minecraft Clone</title>
+    <title>JS Minecraft Clone (Chrome Fix)</title>
     <style>
         body {
             margin: 0;
@@ -11,7 +11,7 @@
             overflow: hidden;
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
             user-select: none;
-            background-color: #202020; /* Niet meer verblindend wit! */
+            background-color: #202020;
             color: white;
         }
 
@@ -51,13 +51,14 @@
             top: 50%;
             left: 50%;
             transform: translate(-50%, -50%);
-            background: rgba(0, 0, 0, 0.85);
+            background: rgba(0, 0, 0, 0.9);
             padding: 30px;
             border-radius: 8px;
             text-align: center;
             cursor: pointer;
             border: 2px solid #555;
-            min-width: 300px;
+            min-width: 350px;
+            box-shadow: 0 0 20px rgba(0,0,0,0.7);
         }
 
         #hotbar {
@@ -89,21 +90,21 @@
             box-shadow: 0 0 10px #fff;
         }
 
-        /* Foutmelding stijl */
+        /* Chrome specifieke helppagina bij blokkade */
         #error-msg {
             display: none;
             color: #ff6b6b;
-            background: #3a1a1a;
+            background: #2a1515;
             border: 2px solid #ff6b6b;
-            padding: 15px;
+            padding: 20px;
             margin-top: 15px;
             border-radius: 5px;
             font-size: 14px;
+            text-align: left;
+            line-height: 1.5;
         }
+        #error-msg ol { margin-left: 20px; padding: 0; }
     </style>
-    
-    <script src="https://unpkg.com/three@0.128.0/build/three.min.js"></script>
-    <script src="https://unpkg.com/three@0.128.0/examples/js/controls/PointerLockControls.js"></script>
 </head>
 <body>
 
@@ -116,13 +117,25 @@
 
     <div id="instructions">
         <h2>MINECRAFT JS</h2>
-        <p id="click-prompt" style="font-size: 20px; color: #5cc441; font-weight: bold;">Klik hier om te spelen</p>
-        <p style="font-size: 14px; color: #aaa; line-height: 1.5;">
-            <b>WASD</b> = Bewegen | <b>SPATIE</b> = Springen<br>
-            <b>Linksklik</b> = Slopen | <b>Rechtsklik</b> = Bouwen<br>
-            <b>Toets 1 t/m 4</b> = Wissel blok
-        </p>
-        <div id="error-msg">Laden mislukt... Je browser blokkeert de 3D-bestanden. Probeer een andere browser (zoals Chrome of Firefox) of zet je adblocker uit voor dit bestand.</div>
+        <p id="status-text" style="color: #ffaa00;">3D Bestanden laden...</p>
+        
+        <div id="game-controls" style="display: none;">
+            <p style="font-size: 22px; color: #5cc441; font-weight: bold; margin: 10px 0;">Klik hier om te spelen</p>
+            <p style="font-size: 14px; color: #aaa; line-height: 1.6;">
+                <b>WASD</b> = Bewegen | <b>SPATIE</b> = Springen<br>
+                <b>Linksklik</b> = Blok slopen | <b>Rechtsklik</b> = Blok bouwen<br>
+                <b>Toets 1 t/m 4</b> = Wissel van blok
+            </p>
+        </div>
+
+        <div id="error-msg">
+            <b>Oeps! Chrome blokkeert de 3D-engine extern. Fix dit zo:</b><br><br>
+            <ol>
+                <li>Heb je een <b>Adblocker</b> (uBlock/AdBlock)? Klik op het icoontje rechtsboven in Chrome en zet hem uit voor dit bestand.</li>
+                <li><b>Incognito-truk:</b> Druk op <code>Ctrl + Shift + N</code> voor een geheim venster (hier staan extensies uit) en sleep dit HTML-bestand daar eens in.</li>
+                <li>Als je op een <b>school- of werklaptop</b> zit, blokkeert de netwerkbeheerder dit helaas.</li>
+            </ol>
+        </div>
     </div>
 
     <div id="hotbar">
@@ -133,15 +146,69 @@
     </div>
 
     <script>
-        // Check direct of Three.js wel is ingeladen
-        if (typeof THREE === 'undefined') {
-            document.getElementById('error-msg').style.display = 'block';
-            document.getElementById('click-prompt').style.display = 'none';
-        } else {
-            // Start de game als alles aanwezig is
+        // Lijst met alternatieve servers (CDNs) om blokkades te omzeilen
+        const threeSources = [
+            "https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js",
+            "https://unpkg.com/three@0.128.0/build/three.min.js",
+            "https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"
+        ];
+
+        const controlsSources = [
+            "https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/PointerLockControls.js",
+            "https://unpkg.com/three@0.128.0/examples/js/controls/PointerLockControls.js",
+            "https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/examples/js/controls/PointerLockControls.js"
+        ];
+
+        // Helper om scripts dynamisch in te laden
+        function loadScript(src) {
+            return new Promise((resolve, reject) => {
+                const script = document.createElement('script');
+                script.src = src;
+                script.onload = resolve;
+                script.onerror = reject;
+                document.head.appendChild(script);
+            });
+        }
+
+        // Probeert de servers één voor één tot er eentje werkt
+        async function initEngine() {
+            let threeLoaded = false;
+            for (let src of threeSources) {
+                try {
+                    await loadScript(src);
+                    threeLoaded = true;
+                    break;
+                } catch(e) { console.warn("Server weigerde:", src); }
+            }
+
+            if (!threeLoaded) { showChromeError(); return; }
+
+            let controlsLoaded = false;
+            for (let src of controlsSources) {
+                try {
+                    await loadScript(src);
+                    controlsLoaded = true;
+                    break;
+                } catch(e) { console.warn("Server weigerde:", src); }
+            }
+
+            if (!controlsLoaded) { showChromeError(); return; }
+
+            // Alles gelukt! Start de game loop
+            document.getElementById('status-text').style.display = 'none';
+            document.getElementById('game-controls').style.display = 'block';
             runGame();
         }
 
+        function showChromeError() {
+            document.getElementById('status-text').style.display = 'none';
+            document.getElementById('error-msg').style.display = 'block';
+        }
+
+        // Start het laadproces direct
+        initEngine();
+
+        // --- Core Game code ---
         function runGame() {
             const container = document.getElementById('canvas-container');
             const scoreEl = document.getElementById('score');
@@ -172,7 +239,7 @@
 
             function init() {
                 scene = new THREE.Scene();
-                scene.background = new THREE.Color(0x7ec0ee); // Dit maakt de lucht blauw
+                scene.background = new THREE.Color(0x7ec0ee);
                 scene.fog = new THREE.FogExp2(0x7ec0ee, 0.05);
 
                 camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
@@ -188,16 +255,13 @@
                 controls = new THREE.PointerLockControls(camera, document.body);
 
                 instructions.addEventListener('click', () => {
-                    controls.lock();
+                    if(document.getElementById('game-controls').style.display !== 'none') {
+                        controls.lock();
+                    }
                 });
 
-                controls.addEventListener('lock', () => {
-                    instructions.style.display = 'none';
-                });
-
-                controls.addEventListener('unlock', () => {
-                    instructions.style.display = 'block';
-                });
+                controls.addEventListener('lock', () => { instructions.style.display = 'none'; });
+                controls.addEventListener('unlock', () => { instructions.style.display = 'block'; });
 
                 scene.add(controls.getObject());
 
@@ -245,7 +309,6 @@
             function generateWorld() {
                 const worldSize = 16;
                 const depth = 3;
-
                 for (let x = 0; x < worldSize; x++) {
                     for (let z = 0; z < worldSize; z++) {
                         for (let y = 0; y < depth; y++) {
