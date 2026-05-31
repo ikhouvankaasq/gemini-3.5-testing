@@ -1,0 +1,408 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>JS Minecraft Clone (Chrome Fix)</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            user-select: none;
+            background-color: #202020;
+            color: white;
+        }
+
+        #canvas-container {
+            width: 100vw;
+            height: 100vh;
+        }
+
+        #crosshair {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 10px;
+            height: 10px;
+            transform: translate(-50%, -50%);
+            pointer-events: none;
+        }
+        #crosshair::before, #crosshair::after {
+            content: '';
+            position: absolute;
+            background: rgba(255, 255, 255, 0.7);
+        }
+        #crosshair::before { top: 4px; left: 0; width: 10px; height: 2px; }
+        #crosshair::after { top: 0; left: 4px; width: 2px; height: 10px; }
+
+        #ui-overlay {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.8);
+            font-weight: bold;
+            pointer-events: none;
+        }
+
+        #instructions {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(0, 0, 0, 0.9);
+            padding: 30px;
+            border-radius: 8px;
+            text-align: center;
+            cursor: pointer;
+            border: 2px solid #555;
+            min-width: 350px;
+            box-shadow: 0 0 20px rgba(0,0,0,0.7);
+        }
+
+        #hotbar {
+            position: absolute;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            display: flex;
+            background: rgba(0, 0, 0, 0.5);
+            padding: 5px;
+            border-radius: 5px;
+            border: 2px solid #333;
+        }
+
+        .slot {
+            width: 60px;
+            height: 50px;
+            margin: 0 4px;
+            border: 2px solid #555;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 11px;
+            font-weight: bold;
+        }
+
+        .slot.active {
+            border-color: #fff;
+            box-shadow: 0 0 10px #fff;
+        }
+
+        /* Chrome specifieke helppagina bij blokkade */
+        #error-msg {
+            display: none;
+            color: #ff6b6b;
+            background: #2a1515;
+            border: 2px solid #ff6b6b;
+            padding: 20px;
+            margin-top: 15px;
+            border-radius: 5px;
+            font-size: 14px;
+            text-align: left;
+            line-height: 1.5;
+        }
+        #error-msg ol { margin-left: 20px; padding: 0; }
+    </style>
+</head>
+<body>
+
+    <div id="canvas-container"></div>
+    <div id="crosshair"></div>
+    
+    <div id="ui-overlay">
+        <div>Blokken Gesloopt: <span id="score">0</span></div>
+    </div>
+
+    <div id="instructions">
+        <h2>MINECRAFT JS</h2>
+        <p id="status-text" style="color: #ffaa00;">3D Bestanden laden...</p>
+        
+        <div id="game-controls" style="display: none;">
+            <p style="font-size: 22px; color: #5cc441; font-weight: bold; margin: 10px 0;">Klik hier om te spelen</p>
+            <p style="font-size: 14px; color: #aaa; line-height: 1.6;">
+                <b>WASD</b> = Bewegen | <b>SPATIE</b> = Springen<br>
+                <b>Linksklik</b> = Blok slopen | <b>Rechtsklik</b> = Blok bouwen<br>
+                <b>Toets 1 t/m 4</b> = Wissel van blok
+            </p>
+        </div>
+
+        <div id="error-msg">
+            <b>Oeps! Chrome blokkeert de 3D-engine extern. Fix dit zo:</b><br><br>
+            <ol>
+                <li>Heb je een <b>Adblocker</b> (uBlock/AdBlock)? Klik op het icoontje rechtsboven in Chrome en zet hem uit voor dit bestand.</li>
+                <li><b>Incognito-truk:</b> Druk op <code>Ctrl + Shift + N</code> voor een geheim venster (hier staan extensies uit) en sleep dit HTML-bestand daar eens in.</li>
+                <li>Als je op een <b>school- of werklaptop</b> zit, blokkeert de netwerkbeheerder dit helaas.</li>
+            </ol>
+        </div>
+    </div>
+
+    <div id="hotbar">
+        <div class="slot active" id="slot1" style="background-color: #5cc441;">Gras (1)</div>
+        <div class="slot" id="slot2" style="background-color: #866043;">Aarde (2)</div>
+        <div class="slot" id="slot3" style="background-color: #808080;">Steen (3)</div>
+        <div class="slot" id="slot4" style="background-color: #a07040;">Hout (4)</div>
+    </div>
+
+    <script>
+        // Lijst met alternatieve servers (CDNs) om blokkades te omzeilen
+        const threeSources = [
+            "https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js",
+            "https://unpkg.com/three@0.128.0/build/three.min.js",
+            "https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"
+        ];
+
+        const controlsSources = [
+            "https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/PointerLockControls.js",
+            "https://unpkg.com/three@0.128.0/examples/js/controls/PointerLockControls.js",
+            "https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/examples/js/controls/PointerLockControls.js"
+        ];
+
+        // Helper om scripts dynamisch in te laden
+        function loadScript(src) {
+            return new Promise((resolve, reject) => {
+                const script = document.createElement('script');
+                script.src = src;
+                script.onload = resolve;
+                script.onerror = reject;
+                document.head.appendChild(script);
+            });
+        }
+
+        // Probeert de servers één voor één tot er eentje werkt
+        async function initEngine() {
+            let threeLoaded = false;
+            for (let src of threeSources) {
+                try {
+                    await loadScript(src);
+                    threeLoaded = true;
+                    break;
+                } catch(e) { console.warn("Server weigerde:", src); }
+            }
+
+            if (!threeLoaded) { showChromeError(); return; }
+
+            let controlsLoaded = false;
+            for (let src of controlsSources) {
+                try {
+                    await loadScript(src);
+                    controlsLoaded = true;
+                    break;
+                } catch(e) { console.warn("Server weigerde:", src); }
+            }
+
+            if (!controlsLoaded) { showChromeError(); return; }
+
+            // Alles gelukt! Start de game loop
+            document.getElementById('status-text').style.display = 'none';
+            document.getElementById('game-controls').style.display = 'block';
+            runGame();
+        }
+
+        function showChromeError() {
+            document.getElementById('status-text').style.display = 'none';
+            document.getElementById('error-msg').style.display = 'block';
+        }
+
+        // Start het laadproces direct
+        initEngine();
+
+        // --- Core Game code ---
+        function runGame() {
+            const container = document.getElementById('canvas-container');
+            const scoreEl = document.getElementById('score');
+            const instructions = document.getElementById('instructions');
+            
+            let scene, camera, renderer, controls;
+            let blocks = [];
+            let blockCount = 0;
+            
+            let moveForward = false, moveBackward = false, moveLeft = false, moveRight = false, canJump = false;
+            let velocity = new THREE.Vector3(), direction = new THREE.Vector3();
+            let prevTime = performance.now();
+
+            const BLOCK_SIZE = 1;
+            let selectedBlockType = 1;
+            
+            const blockMaterials = {
+                1: new THREE.MeshLambertMaterial({ color: 0x5cc441 }),
+                2: new THREE.MeshLambertMaterial({ color: 0x866043 }),
+                3: new THREE.MeshLambertMaterial({ color: 0x808080 }),
+                4: new THREE.MeshLambertMaterial({ color: 0xa07040 })
+            };
+
+            const blockGeometry = new THREE.BoxGeometry(BLOCK_SIZE, BLOCK_SIZE, BLOCK_SIZE);
+
+            init();
+            animate();
+
+            function init() {
+                scene = new THREE.Scene();
+                scene.background = new THREE.Color(0x7ec0ee);
+                scene.fog = new THREE.FogExp2(0x7ec0ee, 0.05);
+
+                camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+                camera.position.set(8, 4, 8);
+
+                const ambientLight = new THREE.AmbientLight(0xcccccc, 0.6);
+                scene.add(ambientLight);
+
+                const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+                directionalLight.position.set(20, 40, 20);
+                scene.add(directionalLight);
+
+                controls = new THREE.PointerLockControls(camera, document.body);
+
+                instructions.addEventListener('click', () => {
+                    if(document.getElementById('game-controls').style.display !== 'none') {
+                        controls.lock();
+                    }
+                });
+
+                controls.addEventListener('lock', () => { instructions.style.display = 'none'; });
+                controls.addEventListener('unlock', () => { instructions.style.display = 'block'; });
+
+                scene.add(controls.getObject());
+
+                const onKeyDown = (event) => {
+                    switch (event.code) {
+                        case 'KeyW': moveForward = true; break;
+                        case 'KeyA': moveLeft = true; break;
+                        case 'KeyS': moveBackward = true; break;
+                        case 'KeyD': moveRight = true; break;
+                        case 'Space':
+                            if (canJump === true) velocity.y += 8;
+                            canJump = false;
+                            break;
+                        case 'Digit1': switchActiveSlot(1); break;
+                        case 'Digit2': switchActiveSlot(2); break;
+                        case 'Digit3': switchActiveSlot(3); break;
+                        case 'Digit4': switchActiveSlot(4); break;
+                    }
+                };
+
+                const onKeyUp = (event) => {
+                    switch (event.code) {
+                        case 'KeyW': moveForward = false; break;
+                        case 'KeyA': moveLeft = false; break;
+                        case 'KeyS': moveBackward = false; break;
+                        case 'KeyD': moveRight = false; break;
+                    }
+                };
+
+                document.addEventListener('keydown', onKeyDown);
+                document.addEventListener('keyup', onKeyUp);
+                document.addEventListener('mousedown', onMouseDown);
+                window.addEventListener('contextmenu', e => e.preventDefault());
+
+                generateWorld();
+
+                renderer = new THREE.WebGLRenderer({ antialias: true });
+                renderer.setPixelRatio(window.devicePixelRatio);
+                renderer.setSize(window.innerWidth, window.innerHeight);
+                container.appendChild(renderer.domElement);
+
+                window.addEventListener('resize', onWindowResize);
+            }
+
+            function generateWorld() {
+                const worldSize = 16;
+                const depth = 3;
+                for (let x = 0; x < worldSize; x++) {
+                    for (let z = 0; z < worldSize; z++) {
+                        for (let y = 0; y < depth; y++) {
+                            let type = 2;
+                            if (y === depth - 1) type = 1;
+                            if (y < depth - 2) type = 3;
+                            createBlock(x, y, z, type);
+                        }
+                    }
+                }
+            }
+
+            function createBlock(x, y, z, type) {
+                const mesh = new THREE.Mesh(blockGeometry, blockMaterials[type]);
+                mesh.position.set(x, y, z);
+                scene.add(mesh);
+                blocks.push(mesh);
+            }
+
+            function onMouseDown(event) {
+                if (!controls.isLocked) return;
+
+                const raycaster = new THREE.Raycaster();
+                raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
+                const intersects = raycaster.intersectObjects(blocks);
+
+                if (intersects.length > 0 && intersects[0].distance < 6) {
+                    const intersect = intersects[0];
+
+                    if (event.button === 0) {
+                        scene.remove(intersect.object);
+                        blocks = blocks.filter(b => b !== intersect.object);
+                        blockCount++;
+                        scoreEl.innerText = blockCount;
+                    } 
+                    else if (event.button === 2) {
+                        const normal = intersect.face.normal;
+                        const newPosition = intersect.object.position.clone().add(normal);
+                        const playerPos = controls.getObject().position;
+                        
+                        if (Math.abs(playerPos.x - newPosition.x) < 0.6 &&
+                            Math.abs(playerPos.z - newPosition.z) < 0.6 &&
+                            playerPos.y >= newPosition.y - 1 && playerPos.y <= newPosition.y + 1) {
+                            return; 
+                        }
+                        createBlock(newPosition.x, newPosition.y, newPosition.z, selectedBlockType);
+                    }
+                }
+            }
+
+            function switchActiveSlot(slotId) {
+                selectedBlockType = slotId;
+                document.querySelectorAll('.slot').forEach(slot => slot.classList.remove('active'));
+                document.getElementById(`slot${slotId}`).classList.add('active');
+            }
+
+            function onWindowResize() {
+                camera.aspect = window.innerWidth / window.innerHeight;
+                camera.updateProjectionMatrix();
+                renderer.setSize(window.innerWidth, window.innerHeight);
+            }
+
+            function animate() {
+                requestAnimationFrame(animate);
+
+                if (controls.isLocked) {
+                    const time = performance.now();
+                    const delta = (time - prevTime) / 1000;
+
+                    velocity.x -= velocity.x * 10.0 * delta;
+                    velocity.z -= velocity.z * 10.0 * delta;
+                    velocity.y -= 9.8 * 2.5 * delta;
+
+                    direction.z = Number(moveForward) - Number(moveBackward);
+                    direction.x = Number(moveRight) - Number(moveLeft);
+                    direction.normalize();
+
+                    if (moveForward || moveBackward) velocity.z -= direction.z * 40.0 * delta;
+                    if (moveLeft || moveRight) velocity.x -= direction.x * 40.0 * delta;
+
+                    controls.moveRight(-velocity.x * delta);
+                    controls.moveForward(-velocity.z * delta);
+
+                    controls.getObject().position.y += (velocity.y * delta);
+                    if (controls.getObject().position.y < 3.0) {
+                        velocity.y = 0;
+                        controls.getObject().position.y = 3.0;
+                        canJump = true;
+                    }
+                    prevTime = time;
+                }
+                renderer.render(scene, camera);
+            }
+        }
+    </script>
+</body>
+</html>
