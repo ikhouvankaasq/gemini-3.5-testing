@@ -1,0 +1,539 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>JS Minecraft (Smooth Controls & Graphics Update)</title>
+    <style>
+        body { margin: 0; padding: 0; overflow: hidden; font-family: 'Segoe UI', sans-serif; user-select: none; background-color: #202020; color: white; }
+        #canvas-container { width: 100vw; height: 100vh; }
+        /* CSS Pixelation VERWIJDERD: Canvas is nu weer mooi glad op hoge resolutie */
+        canvas { display: block; }
+        
+        #crosshair { position: absolute; top: 50%; left: 50%; width: 10px; height: 10px; transform: translate(-50%, -50%); pointer-events: none; }
+        #crosshair::before, #crosshair::after { content: ''; position: absolute; background: rgba(255, 255, 255, 0.7); }
+        #crosshair::before { top: 4px; left: 0; width: 10px; height: 2px; }
+        #crosshair::after { top: 0; left: 4px; width: 2px; height: 10px; }
+        #ui-overlay { position: absolute; top: 20px; left: 20px; text-shadow: 2px 2px 4px rgba(0,0,0,0.8); font-weight: bold; pointer-events: none; }
+        #instructions { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: rgba(0, 0, 0, 0.9); padding: 30px; border-radius: 8px; text-align: center; cursor: pointer; border: 2px solid #555; min-width: 350px; box-shadow: 0 0 20px rgba(0,0,0,0.7); }
+        
+        /* Minecraft GUI */
+        .minecraft-gui { display: none; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: #c6c6c6; border: 4px solid #fff; border-right-color: #555; border-bottom-color: #555; box-shadow: 0 0 25px rgba(0,0,0,0.6); padding: 18px; font-family: monospace; color: #3f3f3f; z-index: 1000; box-sizing: border-box; }
+        .gui-title-bar { display: flex; justify-content: space-between; margin-bottom: 15px; font-weight: bold; font-size: 18px; color: #3f3f3f; }
+        .gui-slot { width: 44px; height: 44px; background: #8b8b8b; border: 3px solid; border-color: #373737 #fff #fff #373737; box-sizing: border-box; cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 10px; font-weight: bold; color: white; text-shadow: 1px 1px 1px black; text-align: center; }
+        .gui-slot:hover { background: #9e9e9e; }
+        .gui-inventory-container { display: flex; gap: 5px; background: #8b8b8b; padding: 6px; border: 3px solid; border-color: #373737 #fff #fff #373737; justify-content: center; }
+        .gui-status { margin-top: 10px; font-size: 11px; color: #444; text-align: center; font-weight: bold; }
+        .grid-label { font-size: 11px; font-weight: bold; color: #555; margin: 8px 0 4px 0; text-transform: uppercase; }
+
+        /* HUD Hotbar */
+        #hotbar { position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%); display: flex; background: #8b8b8b; padding: 4px; border: 4px solid #373737; gap: 3px; box-shadow: 0 5px 15px rgba(0,0,0,0.5); }
+        .hotbar-slot { width: 46px; height: 46px; background: #8b8b8b; border: 3px solid; border-color: #373737 #fff #fff #373737; display: flex; align-items: center; justify-content: center; font-size: 10px; font-weight: bold; text-shadow: 1px 1px 1px black; text-align: center; box-sizing: border-box; }
+        .hotbar-slot.active { border: 4px solid #ffffff !important; outline: 2px solid #000; z-index: 10; }
+
+        #error-msg { display: none; color: #ff6b6b; background: #2a1515; border: 2px solid #ff6b6b; padding: 20px; margin-top: 15px; border-radius: 5px; font-size: 14px; text-align: left; line-height: 1.5; }
+    </style>
+</head>
+<body>
+    <div id="canvas-container"></div>
+    <div id="crosshair"></div>
+    <div id="ui-overlay"><div>Blokken Gesloopt: <span id="score">0</span></div></div>
+    
+    <div id="instructions">
+        <h2>MINECRAFT JS</h2>
+        <p id="status-text" style="color: #ffaa00;">3D Bestanden laden...</p>
+        <div id="game-controls" style="display: none;">
+            <p style="font-size: 22px; color: #5cc441; font-weight: bold; margin: 10px 0;">Klik hier om te spelen</p>
+            <p style="font-size: 14px; color: #aaa; line-height: 1.6;">
+                <b>WASD</b> = Bewegen | <b>SPATIE</b> = Springen<br>
+                <b>Muiswiel / Toets 1 t/m 0</b> = Wisselen door 10 slots<br>
+                <b>Linksklik</b> = Slopen | <b>Rechtsklik</b> = Bouwen / Actie<br>
+                <b>E</b> = Open Inventory
+            </p>
+        </div>
+        <div id="error-msg"><b>Chrome blokkeert de 3D-engine. Fix:</b><br><br><ol><li>Zet je <b>Adblocker</b> uit.</li><li>Druk op <code>Ctrl + Shift + N</code> (Incognito) en drag dit bestand erin.</li></ol></div>
+    </div>
+
+    <div id="crafting-screen" class="minecraft-gui" style="width: 330px;">
+        <div class="gui-title-bar">
+            <span>Crafting Table</span>
+            <span class="close-gui" style="cursor: pointer; color: #8b0000;">[X]</span>
+        </div>
+        <div style="display: flex; align-items: center; justify-content: center; margin-bottom: 20px; background: rgba(0,0,0,0.05); padding: 15px; border: 2px solid #999;">
+            <div id="crafting-grid" style="display: grid; grid-template-columns: repeat(3, 44px); gap: 4px;"></div>
+            <div style="font-size: 28px; margin: 0 15px; color: #555; font-weight: bold;">➔</div>
+            <div class="gui-slot" style="width: 52px; height: 52px; border-width: 4px;"></div>
+        </div>
+        <div style="font-weight: bold; margin-bottom: 6px; font-size: 13px;">Kies een blok:</div>
+        <div id="gui-inventory-craft" class="gui-inventory-container"></div>
+        <div id="craft-status" class="gui-status">Geselecteerd: Gras</div>
+    </div>
+
+    <div id="inventory-screen" class="minecraft-gui" style="width: 520px;">
+        <div class="gui-title-bar">
+            <span>Inventory</span>
+            <span class="close-gui" style="cursor: pointer; color: #8b0000;">[X]</span>
+        </div>
+        <div style="display: flex; align-items: center; justify-content: flex-start; margin-bottom: 15px; background: rgba(0,0,0,0.05); padding: 10px; border: 2px solid #999; gap: 20px;">
+            <div style="font-size: 12px; font-weight: bold; color: #555;">Crafting:</div>
+            <div id="inv-crafting-grid" style="display: grid; grid-template-columns: repeat(2, 44px); gap: 4px;"></div>
+            <div style="font-size: 24px; color: #555; font-weight: bold;">➔</div>
+            <div class="gui-slot" style="width: 48px; height: 48px; border-width: 4px;"></div>
+        </div>
+        <div class="grid-label">Inventory (3 x 10)</div>
+        <div id="inv-main-grid" style="display: grid; grid-template-columns: repeat(10, 44px); gap: 4px; background: #8b8b8b; padding: 6px; border: 3px solid; border-color: #373737 #fff #fff #373737; margin-bottom: 15px;"></div>
+        <div class="grid-label">Hotbar Slots</div>
+        <div id="inv-hotbar-grid" style="display: grid; grid-template-columns: repeat(10, 44px); gap: 4px; background: #8b8b8b; padding: 6px; border: 3px solid; border-color: #373737 #fff #fff #373737; margin-bottom: 15px;"></div>
+        <div style="font-weight: bold; margin-bottom: 6px; font-size: 13px;">Item Palette:</div>
+        <div id="gui-inventory-personal" class="gui-inventory-container"></div>
+        <div id="inv-status" class="gui-status">Geselecteerd: Gras</div>
+    </div>
+
+    <div id="hotbar">
+        <div class="hotbar-slot active" id="slot1" style="background-color: #5cc441;">Gras</div>
+        <div class="hotbar-slot" id="slot2" style="background-color: #866043;">Aarde</div>
+        <div class="hotbar-slot" id="slot3" style="background-color: #808080;">Steen</div>
+        <div class="hotbar-slot" id="slot4" style="background-color: #b48a57;">Eiken Plank</div>
+        <div class="hotbar-slot" id="slot5" style="background-color: #ab7a4e;">Craft</div>
+        <div class="hotbar-slot" id="slot6"></div>
+        <div class="hotbar-slot" id="slot7"></div>
+        <div class="hotbar-slot" id="slot8"></div>
+        <div class="hotbar-slot" id="slot9"></div>
+        <div class="hotbar-slot" id="slot10"></div>
+    </div>
+
+    <script>
+        const threeSources = ["https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js","https://unpkg.com/three@0.128.0/build/three.min.js"];
+        const controlsSources = ["https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/PointerLockControls.js","https://unpkg.com/three@0.128.0/examples/js/controls/PointerLockControls.js"];
+        function loadScript(src){return new Promise((resolve,reject)=>{const script=document.createElement('script');script.src=src;script.onload=resolve;script.onerror=reject;document.head.appendChild(script);});}
+        async function initEngine(){let threeLoaded=false;for(let src of threeSources){try{await loadScript(src);threeLoaded=true;break;}catch(e){}}if(!threeLoaded){showChromeError();return;}let controlsLoaded=false;for(let src of controlsSources){try{await loadScript(src);controlsLoaded=true;break;}catch(e){}}if(!controlsLoaded){showChromeError();return;}document.getElementById('status-text').style.display='none';document.getElementById('game-controls').style.display='block';runGame();}
+        function showChromeError(){document.getElementById('status-text').style.display='none';document.getElementById('error-msg').style.display='block';}
+        initEngine();
+
+        function runGame() {
+            const container = document.getElementById('canvas-container');
+            const scoreEl = document.getElementById('score');
+            const instructions = document.getElementById('instructions');
+            const craftingScreen = document.getElementById('crafting-screen');
+            const inventoryScreen = document.getElementById('inventory-screen');
+            
+            let scene, camera, renderer, controls;
+            let blocks = []; 
+            let blockCount = 0;
+            
+            let moveForward=false, moveBackward=false, moveLeft=false, moveRight=false, canJump=false;
+            let velocity = new THREE.Vector3(), direction = new THREE.Vector3();
+            let prevTime = performance.now();
+            
+            const PLAYER_HEIGHT = 1.8; 
+            const PLAYER_RADIUS = 0.3; 
+            
+            // De 1.002 overlap is gebleven: dit fixt de naadjes perfect, zónder de graphics lelijk te maken.
+            const blockGeometry = new THREE.BoxGeometry(1.002, 1.002, 1.002);
+            
+            let hotbarSlots = [1, 2, 3, 4, 5, 0, 0, 0, 0, 0];
+            let activeHotbarIndex = 0; 
+            let guiSelectedBlock = 1; 
+            let isCraftingOpen = false;
+            let isInventoryOpen = false;
+
+            let blockMaterials = {}; 
+            const blockColorsHTML = { 1: '#5cc441', 2: '#866043', 3: '#808080', 4: '#b48a57', 5: '#ab7a4e' };
+            const blockNamesHTML = { 1: 'Gras', 2: 'Aarde', 3: 'Steen', 4: 'Eiken Plank', 5: 'Craft' };
+
+            init();
+            setupGUI();
+            animate();
+
+            function init() {
+                scene = new THREE.Scene();
+                scene.background = new THREE.Color(0x7ec0ee); 
+                scene.fog = new THREE.FogExp2(0x7ec0ee, 0.04);
+
+                camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 500);
+                camera.position.set(8, 6, 8); 
+
+                scene.add(new THREE.AmbientLight(0xffffff, 0.6)); 
+                const directionalLight = new THREE.DirectionalLight(0xffffff, 0.6);
+                directionalLight.position.set(20, 40, 20);
+                scene.add(directionalLight);
+
+                // Anti-Aliasing (gladde randen) is terug AAN gezet!
+                renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" }); 
+                renderer.setPixelRatio(window.devicePixelRatio); 
+                renderer.setSize(window.innerWidth, window.innerHeight);
+                container.appendChild(renderer.domElement);
+
+                createAllMaterials(renderer); 
+
+                controls = new THREE.PointerLockControls(camera, document.body);
+                instructions.addEventListener('click', () => {
+                    if(!isCraftingOpen && !isInventoryOpen && document.getElementById('game-controls').style.display !== 'none') {
+                        controls.lock();
+                        prevTime = performance.now(); 
+                    }
+                });
+                
+                controls.addEventListener('lock', () => { 
+                    instructions.style.display = 'none'; 
+                    craftingScreen.style.display = 'none';
+                    inventoryScreen.style.display = 'none';
+                    isCraftingOpen = false;
+                    isInventoryOpen = false;
+                });
+                
+                controls.addEventListener('unlock', () => { 
+                    if (!isCraftingOpen && !isInventoryOpen) {
+                        instructions.style.display = 'block'; 
+                    }
+                });
+                
+                scene.add(controls.getObject());
+
+                const onKeyDown=(e)=>{switch(e.code){
+                    case 'KeyW': if(!isCraftingOpen && !isInventoryOpen) moveForward=true;break;
+                    case 'KeyA': if(!isCraftingOpen && !isInventoryOpen) moveLeft=true;break;
+                    case 'KeyS': if(!isCraftingOpen && !isInventoryOpen) moveBackward=true;break;
+                    case 'KeyD': if(!isCraftingOpen && !isInventoryOpen) moveRight=true;break;
+                    case 'Space':
+                        if (canJump === true && !isCraftingOpen && !isInventoryOpen) { velocity.y = 7.5; canJump = false; }
+                        break;
+                    case 'Digit1':switchActiveSlot(0);break;
+                    case 'Digit2':switchActiveSlot(1);break;
+                    case 'Digit3':switchActiveSlot(2);break;
+                    case 'Digit4':switchActiveSlot(3);break;
+                    case 'Digit5':switchActiveSlot(4);break;
+                    case 'Digit6':switchActiveSlot(5);break;
+                    case 'Digit7':switchActiveSlot(6);break;
+                    case 'Digit8':switchActiveSlot(7);break;
+                    case 'Digit9':switchActiveSlot(8);break;
+                    case 'Digit0':switchActiveSlot(9);break; 
+                    case 'KeyE':
+                        if (isCraftingOpen) return; 
+                        if (isInventoryOpen) closeAllGUIs(); 
+                        else openInventoryGUI();
+                        break;
+                }};
+                
+                const onKeyUp=(e)=>{switch(e.code){case 'KeyW':moveForward=false;break;case 'KeyA':moveLeft=false;break;case 'KeyS':moveBackward=false;break;case 'KeyD':moveRight=false;break;}};
+                
+                window.addEventListener('wheel', (e) => {
+                    if (!controls.isLocked || isCraftingOpen || isInventoryOpen) return;
+                    if (e.deltaY > 0) activeHotbarIndex = (activeHotbarIndex + 1) % 10;
+                    else activeHotbarIndex = (activeHotbarIndex - 1 + 10) % 10;
+                    switchActiveSlot(activeHotbarIndex);
+                });
+
+                document.addEventListener('keydown', onKeyDown);
+                document.addEventListener('keyup', onKeyUp);
+                document.addEventListener('mousedown', onMouseDown);
+                window.addEventListener('contextmenu', e=>e.preventDefault());
+                window.addEventListener('resize', onWindowResize);
+
+                generateWorld();
+                updateHotbarHUD();
+            }
+
+            function createAllMaterials(activeRenderer) {
+                const maxAnisotropy = activeRenderer.capabilities.getMaxAnisotropy();
+
+                function generateSmoothTexture(type, side = 'all') {
+                    const canvas16 = document.createElement('canvas');
+                    canvas16.width = 32; // Hogere resolutie voor soepeler kleurverloop
+                    canvas16.height = 32;
+                    const ctx16 = canvas16.getContext('2d');
+
+                    for (let x = 0; x < 32; x++) {
+                        for (let y = 0; y < 32; y++) {
+                            let r, g, b;
+                            // Ruist in textures is drastisch verlaagd voor een veel schonere "moderne" look
+                            let noise = (Math.random() - 0.5) * 6; 
+                            
+                            if (type === 1) { 
+                                if (side === 'top') { r = 90 + noise; g = 185 + noise; b = 60; }
+                                else if (side === 'bottom') { r = 125 + noise; g = 85 + noise; b = 55; }
+                                else { 
+                                    if (y < 8 || (y < 12 && x % 4 === 0)) { r = 90 + noise; g = 185 + noise; b = 60; }
+                                    else { r = 125 + noise; g = 85 + noise; b = 55; }
+                                }
+                            } else if (type === 2) { r = 125 + noise; g = 85 + noise; b = 55; }
+                            else if (type === 3) { r = 125 + noise; g = 125 + noise; b = 125; }
+                            else if (type === 4) { 
+                                let baseR = 180, baseG = 138, baseB = 87;
+                                if (y === 7 || y === 15 || y === 23 || y === 31) { r = baseR - 35; g = baseG - 30; b = baseB - 25; } 
+                                else {
+                                    let woodGrain = Math.sin(x * 0.2) * 5;
+                                    r = baseR + noise + woodGrain; g = baseG + noise + woodGrain; b = baseB + noise + woodGrain;
+                                }
+                            } else if (type === 5) { 
+                                if (side === 'top') {
+                                    if (x < 4 || x > 27 || y < 4 || y > 27) { r = 105 + noise; g = 70 + noise; b = 40; } 
+                                    else { r = 170 + noise; g = 130 + noise; b = 80; }
+                                } else if (side === 'bottom') { r = 130 + noise; g = 95 + noise; b = 60; }
+                                else { 
+                                    if (x < 4 || x > 27 || y < 4 || y > 27) { r = 110 + noise; g = 75 + noise; b = 45; } 
+                                    else { r = 160 + noise; g = 120 + noise; b = 75; }
+                                }
+                            }
+                            ctx16.fillStyle = `rgb(${Math.floor(Math.max(0,Math.min(255,r)))},${Math.floor(Math.max(0,Math.min(255,g)))},${Math.floor(Math.max(0,Math.min(255,b)))})`;
+                            ctx16.fillRect(x, y, 1, 1);
+                        }
+                    }
+                    
+                    const texture = new THREE.CanvasTexture(canvas16);
+                    // Het "Lelijke Pixel Filter" is vervangen door smooth Linear filtering
+                    texture.magFilter = THREE.LinearFilter;
+                    texture.minFilter = THREE.LinearMipmapLinearFilter;
+                    texture.generateMipmaps = true;
+                    texture.anisotropy = maxAnisotropy; 
+                    return new THREE.MeshLambertMaterial({ map: texture });
+                }
+
+                const grassTop = generateSmoothTexture(1, 'top');
+                const grassSide = generateSmoothTexture(1, 'side');
+                const grassBottom = generateSmoothTexture(1, 'bottom');
+                blockMaterials[1] = [grassSide, grassSide, grassTop, grassBottom, grassSide, grassSide];
+                const dirtMat = generateSmoothTexture(2);
+                blockMaterials[2] = [dirtMat, dirtMat, dirtMat, dirtMat, dirtMat, dirtMat];
+                const stoneMat = generateSmoothTexture(3);
+                blockMaterials[3] = [stoneMat, stoneMat, stoneMat, stoneMat, stoneMat, stoneMat];
+                const woodMat = generateSmoothTexture(4);
+                blockMaterials[4] = [woodMat, woodMat, woodMat, woodMat, woodMat, woodMat];
+                const craftTop = generateSmoothTexture(5, 'top');
+                const craftSide = generateSmoothTexture(5, 'side');
+                const craftBottom = generateSmoothTexture(5, 'bottom');
+                blockMaterials[5] = [craftSide, craftSide, craftTop, craftBottom, craftSide, craftSide];
+            }
+
+            function generateWorld() {
+                const worldSize = 20;
+                const depth = 3;
+                for(let x=0; x<worldSize; x++) {
+                    for(let z=0; z<worldSize; z++) {
+                        for(let y=0; y<depth; y++) {
+                            let type = 2; 
+                            if(y===depth-1) type=1; 
+                            if(y<depth-2) type=3; 
+                            createBlock(x, y, z, type);
+                        }
+                    }
+                }
+            }
+
+            function createBlock(x,y,z,type) {
+                const mesh = new THREE.Mesh(blockGeometry, blockMaterials[type]);
+                mesh.position.set(Math.round(x), Math.round(y), Math.round(z));
+                mesh.blockType = type; 
+                mesh.matrixAutoUpdate = false;
+                mesh.updateMatrix();
+                scene.add(mesh);
+                blocks.push(mesh);
+            }
+
+            function onMouseDown(e) {
+                if(!controls.isLocked || isCraftingOpen || isInventoryOpen) return;
+                const raycaster = new THREE.Raycaster();
+                raycaster.setFromCamera(new THREE.Vector2(0,0), camera);
+                const intersects = raycaster.intersectObjects(blocks);
+
+                if(intersects.length>0 && intersects[0].distance<6) {
+                    const intersect = intersects[0];
+                    if(e.button===0) { 
+                        scene.remove(intersect.object);
+                        blocks = blocks.filter(b => b!==intersect.object);
+                        blockCount++;
+                        scoreEl.innerText = blockCount;
+                    } 
+                    else if(e.button===2) { 
+                        if(intersect.object.blockType === 5) {
+                            openCraftingGUI();
+                            return;
+                        }
+                        const activeBlockType = hotbarSlots[activeHotbarIndex];
+                        if(activeBlockType === 0) return; 
+
+                        const normal = intersect.face.normal;
+                        const newPos = intersect.object.position.clone().add(normal);
+                        
+                        const playerPos = controls.getObject().position;
+                        if(Math.abs(playerPos.x - newPos.x) < 0.65 &&
+                           Math.abs(playerPos.z - newPos.z) < 0.65 &&
+                           playerPos.y >= newPos.y - 1 && playerPos.y <= newPos.y + PLAYER_HEIGHT) {
+                            return; 
+                        }
+                        createBlock(newPos.x, newPos.y, newPos.z, activeBlockType);
+                    }
+                }
+            }
+
+            function checkCollision(pos) {
+                const pMinX = pos.x - PLAYER_RADIUS;
+                const pMaxX = pos.x + PLAYER_RADIUS;
+                const pMinY = pos.y - PLAYER_HEIGHT; 
+                const pMaxY = pos.y - 0.1; 
+                const pMinZ = pos.z - PLAYER_RADIUS;
+                const pMaxZ = pos.z + PLAYER_RADIUS;
+
+                for (let i = 0; i < blocks.length; i++) {
+                    const b = blocks[i];
+                    const bMinX = b.position.x - 0.5;
+                    const bMaxX = b.position.x + 0.5;
+                    const bMinY = b.position.y - 0.5;
+                    const bMaxY = b.position.y + 0.5;
+                    const bMinZ = b.position.z - 0.5;
+                    const bMaxZ = b.position.z + 0.5;
+
+                    if (pMaxX > bMinX && pMinX < bMaxX &&
+                        pMaxY > bMinY && pMinY < bMaxY &&
+                        pMaxZ > bMinZ && pMinZ < bMaxZ) {
+                        return true;
+                    }
+                }
+                return false;
+            }
+
+            function openCraftingGUI() { resetMovement(); isCraftingOpen=true; controls.unlock(); craftingScreen.style.display='block'; instructions.style.display='none'; }
+            function openInventoryGUI() { resetMovement(); isInventoryOpen=true; controls.unlock(); syncInventoryHotbarDOM(); inventoryScreen.style.display='block'; instructions.style.display='none'; }
+            function closeAllGUIs() { craftingScreen.style.display='none'; inventoryScreen.style.display='none'; isCraftingOpen=false; isInventoryOpen=false; controls.lock(); }
+            function resetMovement() { moveForward=moveBackward=moveLeft=moveRight=false; velocity.set(0,0,0); }
+
+            function syncInventoryHotbarDOM() {
+                const invHotbarGrid = document.getElementById('inv-hotbar-grid');
+                invHotbarGrid.innerHTML = '';
+                for (let i = 0; i < 10; i++) {
+                    const slot = document.createElement('div');
+                    slot.className = 'gui-slot';
+                    const typeId = hotbarSlots[i];
+                    slot.dataset.type = typeId.toString();
+                    if(typeId > 0) { slot.style.backgroundColor = blockColorsHTML[typeId]; slot.innerText = blockNamesHTML[typeId]; }
+                    slot.addEventListener('click', () => {
+                        if (slot.dataset.type == guiSelectedBlock) { slot.style.backgroundColor = '#8b8b8b'; slot.innerText = ''; slot.dataset.type = "0"; hotbarSlots[i] = 0; } 
+                        else { slot.dataset.type = guiSelectedBlock; slot.style.backgroundColor = blockColorsHTML[guiSelectedBlock]; slot.innerText = blockNamesHTML[guiSelectedBlock]; hotbarSlots[i] = guiSelectedBlock; }
+                        updateHotbarHUD();
+                    });
+                    invHotbarGrid.appendChild(slot);
+                }
+            }
+
+            function setupGUI() {
+                const grid3x3 = document.getElementById('crafting-grid');
+                const grid2x2 = document.getElementById('inv-crafting-grid');
+                const mainInvGrid = document.getElementById('inv-main-grid');
+                const invCraftPallet = document.getElementById('gui-inventory-craft');
+                const invPersPallet = document.getElementById('gui-inventory-personal');
+
+                const createSlotLogic = (slot) => {
+                    slot.addEventListener('click', () => {
+                        if (slot.dataset.type == guiSelectedBlock) { slot.style.backgroundColor = '#8b8b8b'; slot.innerText = ''; slot.dataset.type = "0"; } 
+                        else { slot.dataset.type = guiSelectedBlock; slot.style.backgroundColor = blockColorsHTML[guiSelectedBlock]; slot.innerText = blockNamesHTML[guiSelectedBlock]; }
+                    });
+                };
+
+                for (let i = 0; i < 9; i++) { const slot = document.createElement('div'); slot.className = 'gui-slot'; slot.dataset.type = "0"; createSlotLogic(slot); grid3x3.appendChild(slot); }
+                for (let i = 0; i < 4; i++) { const slot = document.createElement('div'); slot.className = 'gui-slot'; slot.dataset.type = "0"; createSlotLogic(slot); grid2x2.appendChild(slot); }
+                for (let i = 0; i < 30; i++) { const slot = document.createElement('div'); slot.className = 'gui-slot'; slot.dataset.type = "0"; createSlotLogic(slot); mainInvGrid.appendChild(slot); }
+
+                const populateSelector = (containerElement, statusElement) => {
+                    Object.keys(blockNamesHTML).forEach(typeId => {
+                        const slot = document.createElement('div');
+                        slot.className = 'gui-slot';
+                        slot.style.backgroundColor = blockColorsHTML[typeId];
+                        if(typeId == guiSelectedBlock) slot.style.borderColor = "white";
+                        slot.innerText = blockNamesHTML[typeId];
+                        slot.addEventListener('click', () => {
+                            guiSelectedBlock = parseInt(typeId);
+                            containerElement.querySelectorAll('.gui-slot').forEach(d => d.style.borderColor = '#373737 #fff #fff #373737');
+                            slot.style.borderColor = 'white';
+                            statusElement.innerText = `Geselecteerd: ${blockNamesHTML[typeId]}`;
+                        });
+                        containerElement.appendChild(slot);
+                    });
+                };
+                populateSelector(invCraftPallet, document.getElementById('craft-status'));
+                populateSelector(invPersPallet, document.getElementById('inv-status'));
+                document.querySelectorAll('.close-gui').forEach(btn => btn.addEventListener('click', closeAllGUIs));
+            }
+
+            function updateHotbarHUD() {
+                for (let i = 0; i < 10; i++) {
+                    const slotEl = document.getElementById(`slot${i + 1}`);
+                    const typeId = hotbarSlots[i];
+                    if (typeId > 0) { slotEl.style.backgroundColor = blockColorsHTML[typeId]; slotEl.innerText = blockNamesHTML[typeId]; } 
+                    else { slotEl.style.backgroundColor = '#8b8b8b'; slotEl.innerText = ''; }
+                }
+            }
+
+            function switchActiveSlot(index) { activeHotbarIndex = index; document.querySelectorAll('.hotbar-slot').forEach(s => s.classList.remove('active')); document.getElementById(`slot${index + 1}`).classList.add('active'); }
+
+            function animate() {
+                requestAnimationFrame(animate);
+
+                const time = performance.now();
+                const delta = Math.min((time - prevTime) / 1000, 0.05); 
+                prevTime = time;
+
+                if (controls.isLocked && !isCraftingOpen && !isInventoryOpen) {
+                    velocity.y -= 9.8 * 2.5 * delta; 
+                    velocity.x -= velocity.x * 10.0 * delta; 
+                    velocity.z -= velocity.z * 10.0 * delta;
+
+                    direction.z = Number(moveForward) - Number(moveBackward);
+                    direction.x = Number(moveRight) - Number(moveLeft);
+                    if (direction.lengthSq() > 0) direction.normalize();
+
+                    if (moveForward || moveBackward) velocity.z -= direction.z * 40.0 * delta;
+                    if (moveLeft || moveRight) velocity.x -= direction.x * 40.0 * delta;
+
+                    const player = controls.getObject();
+
+                    // FIX CONTROLS: We halen de wiskundige kijkrichting van de camera op
+                    const rightVec = new THREE.Vector3();
+                    rightVec.setFromMatrixColumn(camera.matrix, 0);
+                    rightVec.y = 0;
+                    rightVec.normalize();
+
+                    const forwardVec = new THREE.Vector3();
+                    forwardVec.crossVectors(camera.up, rightVec).normalize();
+
+                    const moveRightDist = -velocity.x * delta;
+                    const moveForwardDist = -velocity.z * delta;
+
+                    // Dit vertaalt W/A/S/D naar de exacte kant waar jij naar kijkt!
+                    const dx = (rightVec.x * moveRightDist) + (forwardVec.x * moveForwardDist);
+                    const dz = (rightVec.z * moveRightDist) + (forwardVec.z * moveForwardDist);
+                    const dy = velocity.y * delta;
+
+                    // X-As
+                    player.position.x += dx;
+                    if (checkCollision(player.position)) {
+                        player.position.x -= dx;
+                        velocity.x = 0;
+                    }
+
+                    // Z-As
+                    player.position.z += dz;
+                    if (checkCollision(player.position)) {
+                        player.position.z -= dz;
+                        velocity.z = 0;
+                    }
+
+                    // Y-As
+                    player.position.y += dy;
+                    let grounded = false;
+                    if (checkCollision(player.position)) {
+                        player.position.y -= dy; 
+                        if (velocity.y <= 0) {
+                            grounded = true;
+                        }
+                        velocity.y = 0;
+                    }
+                    canJump = grounded;
+                }
+                renderer.render(scene, camera);
+            }
+            
+            function onWindowResize() { camera.aspect = window.innerWidth / window.innerHeight; camera.updateProjectionMatrix(); renderer.setSize(window.innerWidth, window.innerHeight); }
+        }
+    </script>
+</body>
+</html>
